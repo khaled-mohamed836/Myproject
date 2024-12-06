@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Arduino Sensor Data</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f4f4f4;
+        }
+        h1 {
+            text-align: center;
+        }
+        .data-container {
+            margin: 20px 0;
+        }
+        .data-container p {
+            font-size: 20px;
+        }
+        .alert {
+            color: red;
+        }
+    </style>
+</head>
+<body>
+    <h1>Arduino Sensor Data</h1>
+
+    <div class="data-container">
+        <p><strong>Water Flow Rate:</strong> <span id="flowRate">Loading...</span> L/min</p>
+        <p><strong>Butane PPM:</strong> <span id="butanePPM">Loading...</span> ppm</p>
+        <p><strong>Flame Status:</strong> <span id="flameStatus">Loading...</span></p>
+        <p><strong>Alert Status:</strong> <span id="alertStatus">Loading...</span></p>
+    </div>
+
+    <script>
+        // Function to fetch data from ThingSpeak
+        function fetchData() {
+            const channelID = '2748986'; // Your channel ID
+            const readAPIKey = '96QJ8O8SMU38U0BP'; // Your read API key
+            const url = `https://api.thingspeak.com/channels/${channelID}/fields/1.json?api_key=${readAPIKey}&results=1`;
+
+            // Fetch data from ThingSpeak API
+            fetch(url)
+                .then(response => response.json())
+                .then(data => {
+                    // Extract the latest data
+                    const latestEntry = data.feeds[0];
+
+                    // Display the fetched data in the HTML elements
+                    document.getElementById('flowRate').textContent = latestEntry.field1 || 'N/A';
+                    document.getElementById('butanePPM').textContent = latestEntry.field2 || 'N/A';
+                    document.getElementById('flameStatus').textContent = latestEntry.field3 == 1 ? 'No Flame Detected' : 'Flame Detected';
+                    document.getElementById('alertStatus').textContent = latestEntry.field4 == 1 ? 'Alert Triggered' : 'No Alert';
+                })
+                .catch(error => {
+                    console.error('Error fetching data from ThingSpeak:', error);
+                    alert('Error fetching data from ThingSpeak.');
+                });
+        }
+
+        // Fetch data every 15 seconds (or any suitable interval)
+        setInterval(fetchData, 15000);
+
+        // Initial fetch on page load
+        fetchData();
+    </script>
+</body>
+</html>
