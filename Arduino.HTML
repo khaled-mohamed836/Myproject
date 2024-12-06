@@ -191,13 +191,20 @@
     }
     
     // Function to get sensor data as HTML
-    String getSensorData() {
-      String html = "<html><body><h1>Sensor Data</h1>";
-      html += "<p><strong>Flow Rate:</strong> " + String(flowRate) + " L/min</p>";
-      html += "<p><strong>Butane PPM:</strong> " + String(calculatePPM(readMQ6() / R0)) + " ppm</p>";
-      html += "<p><strong>Flame Detected:</strong> " + String(digitalRead(flameSensorPins[0]) == LOW ? "Yes" : "No") + "</p>";
-      html += "<p><strong>Alert Condition:</strong> " + String((flowRate > 0 && flowRate < FLOW_THRESHOLD && calculatePPM(readMQ6() / R0) > GAS_THRESHOLD) ? "Active" : "Inactive") + "</p>";
-      html += "</body></html>";
-      return html;
-    }
+String getSensorData() {
+  String html = "<html><head><style>";
+  html += "body { font-family: Arial, sans-serif; background-color: #f4f4f4; padding: 20px; }";
+  html += "h1 { color: #333; }";
+  html += "p { font-size: 18px; color: #333; }";
+  html += "strong { text-decoration: underline; }";  // Underlines the text within <strong> tags
+  html += "</style></head><body>";
+  html += "<h1>Sensor Data</h1>";
+  html += "<p><strong>Flow Rate:</strong> " + String(flowRate) + " L/min</p>";
+  html += "<p><strong>Butane PPM:</strong> " + String(calculatePPM(readMQ6() / R0)) + " ppm</p>";
+  html += "<p><strong>Flame Detected:</strong> " + String(digitalRead(flameSensorPins[0]) == LOW ? "Yes" : "No") + "</p>";
+  html += "<p><strong>Alert Condition:</strong> " + String((flowRate > 0 && flowRate < FLOW_THRESHOLD && calculatePPM(readMQ6() / R0) > GAS_THRESHOLD) ? "Active" : "Inactive") + "</p>";
+  html += "</body></html>";
+  return html;
+}
+
     
