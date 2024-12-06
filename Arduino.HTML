@@ -1,210 +1,230 @@
-#include <Arduino.h>
-    #include <WiFi.h>
-    #include <ThingSpeak.h>
-    #include <ESPAsyncWebServer.h>
-    
-    // Wi-Fi credentials
-    const char* WIFI_NETWORK = "Siuuuu";
-    const char* WIFI_PASSWORD = "22221111";
-    WiFiClient client;
-    
-    // ThingSpeak Credentials
-    #define CHANNEL_ID 2748986
-    #define CHANNEL_API_KEY "96QJ8O8SMU38U0BP"
-    
-    // Water Flow Sensor Definitions
-    #define FLOW_SENSOR_PIN 16
-    volatile uint16_t pulseCount = 0;
-    float flowRate = 0.0;
-    unsigned long lastFlowTime = 0;
-    const float FLOW_THRESHOLD = 35; // Updated Threshold in L/min
-    
-    // MQ-6 Gas Sensor Definitions
-    #define MQ6_ANALOG_PIN 34
-    const float RL = 10.0;  // Load resistance in kilo-ohms (kΩ)
-    float R0 = 10.0;        // Sensor resistance in clean air (needs calibration)
-    const float CLEAN_AIR_FACTOR = 10.0;
-    const float BUTANE_CURVE[3] = {2.3, 0.21, -0.47}; // Butane curve constants
-    const float GAS_THRESHOLD = 100.0; // Updated Threshold in ppm for butane
-    
-    // Flame Sensor Definitions
-    const int flameSensorPins[5] = {27, 26, 25, 33, 32};
-    
-    // Buzzer Definitions
-    #define BUZZER_PIN 17
-    
-    // Web server
-    AsyncWebServer server(80);
-    
-    // Function Prototypes
-    void IRAM_ATTR pulseCounter();
-    float readMQ6();
-    float calculatePPM(float ratio);
-    void connectToWiFi();
-    String getSensorData();
-    
-    void setup() {
-      // Initialize Serial Communication
-      Serial.begin(115200);
-    
-      // Setup Wi-Fi
-      connectToWiFi();
-      ThingSpeak.begin(client);
-    
-      // Setup Water Flow Sensor
-      pinMode(FLOW_SENSOR_PIN, INPUT_PULLUP);
-      attachInterrupt(digitalPinToInterrupt(FLOW_SENSOR_PIN), pulseCounter, FALLING);
-      lastFlowTime = millis();
-    
-      // Calibrate MQ-6 Sensor
-      Serial.println("Calibrating MQ-6 sensor in clean air...");
-      float calibrationSum = 0;
-      for (int i = 0; i < 50; i++) {
-        calibrationSum += readMQ6();
-        delay(1000);
-      }
-      R0 = calibrationSum / 50.0 / CLEAN_AIR_FACTOR;  // Calculate R0 in clean air
-      Serial.print("MQ-6 Calibration complete. R0: ");
-      Serial.println(R0);
-    
-      // Setup Flame Sensors
-      for (int i = 0; i < 5; i++) {
-        pinMode(flameSensorPins[i], INPUT);
-      }
-    
-      // Setup Buzzer
-      pinMode(BUZZER_PIN, OUTPUT);
-      digitalWrite(BUZZER_PIN, LOW);
-    
-      // Web Server Route to serve sensor data
-      server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
-        String sensorData = getSensorData();
-        request->send(200, "text/html", sensorData);
-      });
-    
-      // Start Web Server
-      server.begin();
-      Serial.println("Web server started.");
-    }
-    
-    void loop() {
-      // Water Flow Sensor Processing
-      unsigned long currentTime = millis();
-      if (currentTime - lastFlowTime >= 1000) {
-        lastFlowTime = currentTime;
-        flowRate = (pulseCount / 450.0) * 60.0;
-        pulseCount = 0;
-      }
-    
-      // MQ-6 Gas Sensor Processing
-      float rs = readMQ6();        // Read current Rs value from the sensor
-      if (rs <= 0) {
-        rs = 1; // Prevent division by zero or negative values
-      }
-      float ratio = rs / R0;       // Calculate Rs/R0
-      float butanePPM = calculatePPM(ratio);  // Convert to ppm for butane
-    
-      // Prevent NaN or negative values due to calculation issues
-      if (isnan(butanePPM) || butanePPM < 0) {
-        butanePPM = 0;
-      }
-    
-      // Flame Sensor Processing
-      bool flameDetected = false;
-      for (int i = 0; i < 5; i++) {
-        bool isFlameDetected = digitalRead(flameSensorPins[i]) == LOW;
-        if (isFlameDetected) {
-          flameDetected = true;
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Arduino Project Code</title>
+    <style>
+        /* General Reset */
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
         }
-      }
-    
-      // Check Conditions for Alert
-      bool flameCondition = !flameDetected;
-      bool flowRateCondition = flowRate > 0 && flowRate < FLOW_THRESHOLD;
-      bool butanePPMCondition = butanePPM > GAS_THRESHOLD;
-      bool alertCondition = !flameDetected && flowRate > 0 && flowRate < FLOW_THRESHOLD && butanePPM > GAS_THRESHOLD;
-    
-      // Buzzer Alert
-      if (flameCondition || flowRateCondition || butanePPMCondition || alertCondition) {
-        digitalWrite(BUZZER_PIN, HIGH);  // Turn on buzzer
-      } else {
-        digitalWrite(BUZZER_PIN, LOW);   // Turn off buzzer
-      }
-    
-      // Send Data to ThingSpeak
-      ThingSpeak.setField(1, flowRate);
-      ThingSpeak.setField(2, butanePPM);
-      ThingSpeak.setField(3, flameDetected ? 0 : 1);  // 1 if no flame detected, otherwise 0
-      ThingSpeak.setField(4, alertCondition ? 1 : 0); // Alert condition status
-    
-      int writeSuccess = ThingSpeak.writeFields(CHANNEL_ID, CHANNEL_API_KEY);
-      if (writeSuccess == 200) {
-        Serial.println("Data sent to ThingSpeak successfully.");
-      } else {
-        Serial.print("Error sending data to ThingSpeak. Error code: ");
-        Serial.println(writeSuccess);
-      }
-    
-      // Delay before next loop iteration
-      delay(15000);
-    }
-    
-    // Function to connect to Wi-Fi
-    void connectToWiFi() {
-      Serial.print("Connecting to WiFi network: ");
-      Serial.println(WIFI_NETWORK);
-      
-      WiFi.mode(WIFI_STA);
-      WiFi.begin(WIFI_NETWORK, WIFI_PASSWORD);
-    
-      while (WiFi.status() != WL_CONNECTED) {
-        Serial.print(".");
-        delay(1000);
-      }
-    
-      Serial.println(" Connected!");
-      Serial.print("IP Address: ");
-      Serial.println(WiFi.localIP());
-    }
-    
-    // ISR for pulse counting
-    void IRAM_ATTR pulseCounter() {
-      pulseCount++;
-    }
-    
-    // Function to read the MQ-6 sensor and calculate Rs (sensor resistance)
-    float readMQ6() {
-      int analogValue = analogRead(MQ6_ANALOG_PIN);
-      if (analogValue == 0) {
-        analogValue = 1; // Prevent division by zero
-      }
-      float sensorVoltage = (analogValue / 4095.0) * 3.3;
-      float RS = ((3.3 * RL) / sensorVoltage) - RL;
-      return RS;
-    }
-    
-    // Function to convert Rs/R0 ratio to butane PPM
-    float calculatePPM(float ratio) {
-      float ppmLog = (log10(ratio) - BUTANE_CURVE[1]) / BUTANE_CURVE[2] + BUTANE_CURVE[0];
-      float ppm = pow(10, ppmLog);
-      return ppm;
-    }
-    
-    // Function to get sensor data as HTML
-String getSensorData() {
-  String html = "<html><head><style>";
-  html += "body { font-family: Arial, sans-serif; background-color: #f4f4f4; padding: 20px; }";
-  html += "h1 { color: #333; }";
-  html += "p { font-size: 18px; color: #333; }";
-  html += "strong { text-decoration: underline; }";  // Underlines the text within <strong> tags
-  html += "</style></head><body>";
-  html += "<h1>Sensor Data</h1>";
-  html += "<p><strong>Flow Rate:</strong> " + String(flowRate) + " L/min</p>";
-  html += "<p><strong>Butane PPM:</strong> " + String(calculatePPM(readMQ6() / R0)) + " ppm</p>";
-  html += "<p><strong>Flame Detected:</strong> " + String(digitalRead(flameSensorPins[0]) == LOW ? "Yes" : "No") + "</p>";
-  html += "<p><strong>Alert Condition:</strong> " + String((flowRate > 0 && flowRate < FLOW_THRESHOLD && calculatePPM(readMQ6() / R0) > GAS_THRESHOLD) ? "Active" : "Inactive") + "</p>";
-  html += "</body></html>";
-  return html;
+
+        body {
+            font-family: 'Arial', sans-serif;
+            line-height: 1.6;
+            background: #f4f4f4;
+            color: #333;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: auto;
+            background: #fff;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+
+        header h1 {
+            font-size: 2rem;
+            color: #333;
+            text-align: center;
+            margin-bottom: 20px;
+        }
+
+        main {
+            padding: 20px 0;
+        }
+
+        .code-section h2 {
+            font-size: 1.5rem;
+            color: #555;
+            margin-bottom: 10px;
+        }
+
+        .code-wrapper {
+            background: #222;
+            color: #eee;
+            padding: 15px;
+            border-radius: 5px;
+            overflow-x: auto;
+            max-height: 600px;
+        }
+
+        .code-wrapper code {
+            font-family: 'Courier New', Courier, monospace;
+            white-space: pre;
+        }
+
+        button {
+            display: block;
+            margin: 20px auto;
+            padding: 10px 20px;
+            background: #007BFF;
+            color: #fff;
+            border: none;
+            border-radius: 5px;
+            font-size: 1rem;
+            cursor: pointer;
+            transition: background 0.3s;
+        }
+
+        button:hover {
+            background: #0056b3;
+        }
+
+        footer {
+            text-align: center;
+            margin-top: 20px;
+            font-size: 0.9rem;
+            color: #777;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Arduino Project Code</h1>
+        </header>
+        <main>
+            <section class="code-section">
+                <h2>Code</h2>
+                <div class="code-wrapper">
+                    <pre><code>
+#include &lt;Arduino.h&gt;
+#include &lt;WiFi.h&gt;
+#include &lt;ThingSpeak.h&gt;
+#include &lt;ESPAsyncWebServer.h&gt;
+
+// Wi-Fi credentials
+const char* WIFI_NETWORK = "Siuuuu";
+const char* WIFI_PASSWORD = "22221111";
+WiFiClient client;
+
+// ThingSpeak Credentials
+#define CHANNEL_ID 2748986
+#define CHANNEL_API_KEY "96QJ8O8SMU38U0BP"
+
+// Water Flow Sensor Definitions
+#define FLOW_SENSOR_PIN 16
+volatile uint16_t pulseCount = 0;
+float flowRate = 0.0;
+unsigned long lastFlowTime = 0;
+const float FLOW_THRESHOLD = 35; // Updated Threshold in L/min
+
+// MQ-6 Gas Sensor Definitions
+#define MQ6_ANALOG_PIN 34
+const float RL = 10.0;  // Load resistance in kilo-ohms (kΩ)
+float R0 = 10.0;        // Sensor resistance in clean air (needs calibration)
+const float CLEAN_AIR_FACTOR = 10.0;
+const float BUTANE_CURVE[3] = {2.3, 0.21, -0.47}; // Butane curve constants
+const float GAS_THRESHOLD = 100.0; // Updated Threshold in ppm for butane
+
+// Flame Sensor Definitions
+const int flameSensorPins[5] = {27, 26, 25, 33, 32};
+
+// Buzzer Definitions
+#define BUZZER_PIN 17
+
+// Web server
+AsyncWebServer server(80);
+
+// Function Prototypes
+void IRAM_ATTR pulseCounter();
+float readMQ6();
+float calculatePPM(float ratio);
+void connectToWiFi();
+String getSensorData();
+
+void setup() {
+  // Initialize Serial Communication
+  Serial.begin(115200);
+
+  // Setup Wi-Fi
+  connectToWiFi();
+  ThingSpeak.begin(client);
+
+  // Setup Water Flow Sensor
+  pinMode(FLOW_SENSOR_PIN, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(FLOW_SENSOR_PIN), pulseCounter, FALLING);
+  lastFlowTime = millis();
+
+  // Calibrate MQ-6 Sensor
+  Serial.println("Calibrating MQ-6 sensor in clean air...");
+  float calibrationSum = 0;
+  for (int i = 0; i < 50; i++) {
+    calibrationSum += readMQ6();
+    delay(1000);
+  }
+  R0 = calibrationSum / 50.0 / CLEAN_AIR_FACTOR;  // Calculate R0 in clean air
+  Serial.print("MQ-6 Calibration complete. R0: ");
+  Serial.println(R0);
+
+  // Setup Flame Sensors
+  for (int i = 0; i < 5; i++) {
+    pinMode(flameSensorPins[i], INPUT);
+  }
+
+  // Setup Buzzer
+  pinMode(BUZZER_PIN, OUTPUT);
+  digitalWrite(BUZZER_PIN, LOW);
+
+  // Web Server Route to serve sensor data
+  server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
+    String sensorData = getSensorData();
+    request->send(200, "text/html", sensorData);
+  });
+
+  // Start Web Server
+  server.begin();
+  Serial.println("Web server started.");
 }
 
-    
+void loop() {
+  // [Rest of your Arduino loop code here]
+}
+
+void connectToWiFi() {
+  Serial.print("Connecting to WiFi network: ");
+  Serial.println(WIFI_NETWORK);
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(WIFI_NETWORK, WIFI_PASSWORD);
+
+  while (WiFi.status() != WL_CONNECTED) {
+    Serial.print(".");
+    delay(1000);
+  }
+
+  Serial.println(" Connected!");
+  Serial.print("IP Address: ");
+  Serial.println(WiFi.localIP());
+}
+
+// ISR for pulse counting
+void IRAM_ATTR pulseCounter() {
+  pulseCount++;
+}
+
+// Add your remaining code here...
+
+                    </code></pre>
+                </div>
+                <button onclick="toggleCode()">Toggle Code</button>
+            </section>
+        </main>
+        <footer>
+            <p> &copy; 2024</p>
+        </footer>
+    </div>
+    <script>
+        function toggleCode() {
+            const codeWrapper = document.querySelector('.code-wrapper');
+            codeWrapper.style.display = codeWrapper.style.display === 'none' ? 'block' : 'none';
+        }
+    </script>
+</body>
+</html>
